@@ -6,21 +6,43 @@ service cloud.firestore {
             return request.auth != null
         }
 
-        match /users/{userId} {
-            // Users can only be created by the admin SDK
-            allow create: if false
-            allow update, delete: if isSignedIn() && request.auth.user.id == resource.id
+        function isAuthor(resc){
+            // Make sure user id matches author AND user is not trying to change the original author
+            return request.auth.uid == request.resource.data.author_id
+                && (resc == null || resc.data.author_id == request.resource.data.author_id)
+        }
+
+        function isResourceAuthor(resc){
+            return request.auth.uid == resc.data.author_id
+        }
+
+        function diffKeys(resc){
+            return request.resource.data.diff(resc.data).affectedKeys()
         }
 
         match /{document=**} {
-            function isAuthor(){
-                // Make sure user id matches author AND user is not trying to change the original author
-                return request.auth.user.id == request.resource.data.author_id
-                    && (resource.data.author_id == null || resource.data.author_id == request.resource.data.author_id)
-            }
-
-            allow write: if isSignedIn() && isAuthor()
+            allow create, update: if isSignedIn() && isAuthor(resource)
+            allow delete: if isSignedIn() && isResourceAuthor(resource)
             allow read: if isSignedIn() && request.auth.token != null
+        }
+
+        match /users/{userId} {
+            // Users can only be created by the admin SDK
+            allow create: if false
+            allow update, delete: if isSignedIn() && request.auth.uid == resource.id
+        }
+
+        match /posts/{postId} {
+            // Allow posts, but not likes, to be edited by authors OR allow non-authors to edit likes
+            allow update: if isSignedIn() && (
+                    (isAuthor(resource) && !diffKeys(resource).hasAny(['likes']))
+                    || (!isAuthor(resource) && diffKeys(resource).hasOnly(['likes']))
+                )
+        }
+
+        match /comments/{commentId} {
+            // Allow post author to delete comments
+            allow delete: if isResourceAuthor(resource) || resource.data.post_author_id == request.auth.uid
         }
     }
 }
